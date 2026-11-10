@@ -34,6 +34,8 @@ import com.venus.backgroundopt.hook.handle.android.entity.ActivityManager
 import com.venus.backgroundopt.hook.handle.android.entity.ProcessList
 import com.venus.backgroundopt.hook.handle.android.entity.ProcessRecord
 import com.venus.backgroundopt.hook.handle.android.entity.ProcessRecord.AdjHandleActionType
+import com.venus.backgroundopt.utils.SystemUtils
+import com.venus.backgroundopt.utils.beforeHook
 import com.venus.backgroundopt.utils.clamp
 import com.venus.backgroundopt.utils.concurrent.lock
 import com.venus.backgroundopt.utils.getBooleanFieldValue
@@ -189,6 +191,121 @@ class ProcessListHookKt(
 
         override fun computeImportAppAdj(oomScoreAdj: Int): Int {
             return minImportAppAdj
+        }
+    }
+
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 适配: 接管 adj 应用。
+     *
+     * 实测该 ROM 上 ProcessList#setOomAdj 与 OomAdjuster$Injector#setOomAdj 从不被调用,
+     * 框架只走 psc.OomAdjuster#applyOomAdjLSP(ProcessRecordInternal, boolean)。
+     * 因此在这里、框架写内核之前, 把模块算出的 adj 写回框架的 ProcessRecord(curAdj),
+     * 由系统用它自己的通道(lmkd/ummd/memcg)写入内核。
+     */
+    override fun hook() {
+        super.hook()
+
+        try {
+            SystemUtils.oomAdjusterClassName.beforeHook(
+                classLoader = classLoader,
+                methodName = MethodConstants.applyOomAdjLSP,
+                hookAllMethod = true,
+            ) { param ->
+                try {
+                    handleApplyOomAdjLSP(param.args?.getOrNull(0))
+                } catch (t: Throwable) {
+                    logger.warn("applyOomAdjLSP 接管失败", t)
+                }
+            }
+        } catch (t: Throwable) {
+            logger.warn("applyOomAdjLSP hook 安装失败", t)
+        }
+    }
+
+    @Volatile
+    private var lastApplyOomAdjLogTime: Long = 0L
+
+    /**
+     * 用模块策略覆盖框架即将写入内核的 adj
+     */
+    fun handleApplyOomAdjLSP(frameworkProcessRecord: Any?) {
+        frameworkProcessRecord ?: return
+
+        val pid = try {
+            ProcessRecord.getPid(frameworkProcessRecord)
+        } catch (t: Throwable) {
+            return
+        }
+
+        val process = runningInfo.getRunningProcess(pid) ?: return
+        val appInfo = process.appInfo
+        val appGroupEnum = appInfo.appGroupEnum
+        if (appGroupEnum == AppGroupEnum.DEAD) {
+            return
+        }
+
+        val globalOomScorePolicy = HookCommonProperties.globalOomScorePolicy.value
+        if (!globalOomScorePolicy.enabled) {
+            when (appGroupEnum) {
+                AppGroupEnum.NONE, AppGroupEnum.ACTIVE, AppGroupEnum.IDLE -> Unit
+                else -> return
+            }
+        }
+
+        val state = process.processStateRecord
+        val curAdj = state.curAdj
+        val curRawAdj = state.curRawAdj
+        val adjLastSet = process.oomAdjScore
+
+        val oomMode = HookCommonProperties.oomWorkModePref.oomMode
+        val isNegativeMode = oomMode == OomWorkModePref.MODE_NEGATIVE
+        val adjWillSet = if (isNegativeMode) curAdj else curRawAdj
+
+        val finalApplyAdj = autoApplyAdjHandleAction(
+            adjHandleActionType = process.adjHandleActionType,
+            adj = curAdj,
+            adjWillSet = adjWillSet,
+            isUserSpaceAdj = adjWillSet >= 0,
+            isNegativeMode = isNegativeMode,
+            isHighPriorityProcess = process.isHighPriorityProcess(),
+            mainProcess = process.mainProcess,
+            process = process,
+            appGroupEnum = appGroupEnum,
+            adjHandleFunction = appInfo.adjHandleFunction,
+            shouldHandleAdj = appInfo.shouldHandleAdj(),
+            globalOomScorePolicy = globalOomScorePolicy,
+        )
+
+        process.oomAdjScore = adjWillSet
+
+        // 与原有 setOomAdj 路径一致: 驱动「内存回收 / 内存压缩」
+        try {
+            if (appGroupEnum == AppGroupEnum.NONE && process.mainProcess) {
+                runningInfo.handleActivityEventChangeLocked(
+                    ActivityManagerServiceHookKt.ACTIVITY_STOPPED,
+                    null,
+                    appInfo
+                )
+            }
+
+            runningInfo.processManager.compactProcess(
+                process,
+                adjLastSet,
+                adjWillSet,
+                OomAdjustLevel.NONE
+            )
+        } catch (t: Throwable) {
+            logger.warn("内存压缩/回收驱动失败", t)
+        }
+
+        if (finalApplyAdj != curAdj) {
+            state.curAdj = finalApplyAdj
+
+            val nowMs = System.currentTimeMillis()
+            if (nowMs - lastApplyOomAdjLogTime > 5000) {
+                lastApplyOomAdjLogTime = nowMs
+                logger.info("接管adj: ${process.packageName} pid=$pid $curAdj -> $finalApplyAdj")
+            }
         }
     }
 

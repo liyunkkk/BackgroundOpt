@@ -50,6 +50,8 @@ import com.venus.backgroundopt.hook.handle.android.function.DefaultApplicationCh
 
 import java.util.HashMap;
 
+import de.robv.android.xposed.XposedBridge;
+
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
@@ -76,15 +78,12 @@ public class AndroidHookHandler extends PackageHook {
 
         // hook获取
 //        new DeviceConfigHook(classLoader, runningInfo);
-        new DeviceConfigHookNew(classLoader, runningInfo);
-
+        safeHook("DeviceConfigHookNew", () -> new DeviceConfigHookNew(classLoader, runningInfo));
         // 抓取AMS, 前后台切换
-        new ActivityManagerServiceHook(classLoader, runningInfo);
-        new ActivityManagerServiceHookKt(classLoader, runningInfo);
-
+        safeHook("ActivityManagerServiceHook", () -> new ActivityManagerServiceHook(classLoader, runningInfo));
+        safeHook("ActivityManagerServiceHookKt", () -> new ActivityManagerServiceHookKt(classLoader, runningInfo));
         // 默认桌面
-        new PackageManagerServiceHookKt(classLoader, runningInfo);
-
+        safeHook("PackageManagerServiceHookKt", () -> new PackageManagerServiceHookKt(classLoader, runningInfo));
         // 杀后台hook
 //        new ProcessHook(classLoader, runningInfo);
 //        new ProcessHookKt(classLoader, runningInfo);
@@ -92,57 +91,50 @@ public class AndroidHookHandler extends PackageHook {
         // oom_adj更新hook
         // 2024.3.2: 禁用以通过ProcessList.setOomAdj知晓系统给予当前进程的oom_score_adj
         /*if (CommonProperties.INSTANCE.getOomWorkModePref().getOomMode() == OomWorkModePref.MODE_STRICT) {
-            new ProcessStateRecordHook(classLoader, runningInfo);
+            safeHook("ProcessStateRecordHook", () -> new ProcessStateRecordHook(classLoader, runningInfo));
         }*/
-        new ProcessListHookKt(classLoader, runningInfo);
-
+        safeHook("ProcessListHookKt", () -> new ProcessListHookKt(classLoader, runningInfo));
         // 安卓虚进程处理hook
-        new PhantomProcessListHook(classLoader, runningInfo);
-
+        safeHook("PhantomProcessListHook", () -> new PhantomProcessListHook(classLoader, runningInfo));
 //        new ActivityManagerConstantsHook(classLoader, runningInfo);
 
         // 最近任务可见性hook
-        new RecentTasksHook(classLoader, runningInfo);
-
+        safeHook("RecentTasksHook", () -> new RecentTasksHook(classLoader, runningInfo));
         // 软件卸载
         // 安卓12在PackageManagerServiceHook完成
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {    // 安卓13
-            new DeletePackageHelperHook(classLoader, runningInfo);
+            safeHook("DeletePackageHelperHook", () -> new DeletePackageHelperHook(classLoader, runningInfo));
         }
 
-        new SystemPropertiesHook(classLoader, runningInfo);
-
+        safeHook("SystemPropertiesHook", () -> new SystemPropertiesHook(classLoader, runningInfo));
         // new RoleControllerManagerHook(classLoader, runningInfo);
 
-        new LowMemDetectorHook(classLoader, runningInfo);
+        safeHook("LowMemDetectorHook", () -> new LowMemDetectorHook(classLoader, runningInfo));
+        safeHook("AppProfilerHook", () -> new AppProfilerHook(classLoader, runningInfo));
+        safeHook("ProcessListHookNew", () -> new ProcessListHookNew(classLoader, runningInfo));
+        safeHook("OomAdjusterHookNew", () -> new OomAdjusterHookNew(classLoader, runningInfo));
+        safeHook("ActivityManagerServiceHookNew", () -> new ActivityManagerServiceHookNew(classLoader, runningInfo));
+        safeHook("CachedAppOptimizerHook", () -> new CachedAppOptimizerHook(classLoader, runningInfo));
+        safeHook("PackageManagerServiceHookNew", () -> new PackageManagerServiceHookNew(classLoader, runningInfo));
+        safeHook("ServiceManagerHook", () -> new ServiceManagerHook(classLoader, runningInfo));
+        safeHook("ActivityTaskSupervisorHook", () -> new ActivityTaskSupervisorHook(classLoader, runningInfo));
+        safeHook("PowerManagerServiceHook", () -> new PowerManagerServiceHook(classLoader, runningInfo));
+        safeHook("ActivityManagerConstantsHookNew", () -> new ActivityManagerConstantsHookNew(classLoader, runningInfo));
+        safeHook("ProcessRecordHook", () -> new ProcessRecordHook(classLoader, runningInfo));
+        safeHook("WindowProcessControllerHook", () -> new WindowProcessControllerHook(classLoader, runningInfo));
+        safeHook("DefaultApplicationChangeHook", () -> new DefaultApplicationChangeHook(classLoader, runningInfo));
+        safeHook("CleanUpRemovedTaskHook", () -> new CleanUpRemovedTaskHook(classLoader, runningInfo));
+    }
 
-        new AppProfilerHook(classLoader, runningInfo);
-
-        new ProcessListHookNew(classLoader, runningInfo);
-
-        new OomAdjusterHookNew(classLoader, runningInfo);
-
-        new ActivityManagerServiceHookNew(classLoader, runningInfo);
-
-        new CachedAppOptimizerHook(classLoader, runningInfo);
-
-        new PackageManagerServiceHookNew(classLoader, runningInfo);
-
-        new ServiceManagerHook(classLoader, runningInfo);
-
-        new ActivityTaskSupervisorHook(classLoader, runningInfo);
-
-        new PowerManagerServiceHook(classLoader, runningInfo);
-
-        new ActivityManagerConstantsHookNew(classLoader, runningInfo);
-
-        new ProcessRecordHook(classLoader, runningInfo);
-
-        new WindowProcessControllerHook(classLoader, runningInfo);
-
-        new DefaultApplicationChangeHook(classLoader, runningInfo);
-
-        new CleanUpRemovedTaskHook(classLoader, runningInfo);
+    /**
+     * HyperOS 4 适配: 单个 hook 类注册失败时, 不允许影响后续 hook 的注册。
+     */
+    private void safeHook(String name, Runnable runnable) {
+        try {
+            runnable.run();
+        } catch (Throwable t) {
+            XposedBridge.log("[BackgroundOpt] hook 注册失败: " + name + " : " + t);
+        }
     }
 
     private void initSystemProp() {

@@ -139,7 +139,7 @@ class OomAdjusterHookNew(
 
     override fun hook() {
         // 拿到一些必要的变量
-        ClassConstants.OomAdjuster.afterConstructorHook(
+        SystemUtils.oomAdjusterClassName.afterConstructorHook(
             classLoader = classLoader,
             hookAllMethod = true
         ) { param ->
@@ -168,7 +168,7 @@ class OomAdjusterHookNew(
             methodName = MethodConstants.updateAndTrimProcessLSP,
             hookAllMethod = true,
         ) { it.args[2] = 0 }*/
-        ClassConstants.OomAdjuster.replaceHook(
+        SystemUtils.oomAdjusterClassName.replaceHook(
             classLoader = classLoader,
             methodName = MethodConstants.updateAndTrimProcessLSP,
             hookAllMethod = true,
@@ -176,7 +176,7 @@ class OomAdjusterHookNew(
             updateAndTrimProcessLSP(it)
         }
 
-        ClassConstants.OomAdjuster.replaceHook(
+        SystemUtils.oomAdjusterClassName.replaceHook(
             enable = !SystemUtils.isUOrHigher && Features.USE_TIERED_CACHED_ADJ == true,
             classLoader = classLoader,
             methodName = MethodConstants.assignCachedAdjIfNecessary,
@@ -188,7 +188,7 @@ class OomAdjusterHookNew(
         /**
          * @see [OomAdjusterHook.handleShouldKillExcessiveProcesses]
          */
-        ClassConstants.OomAdjuster.replaceHook(
+        SystemUtils.oomAdjusterClassName.replaceHook(
             classLoader = classLoader,
             methodName = MethodConstants.shouldKillExcessiveProcesses,
             hookAllMethod = true

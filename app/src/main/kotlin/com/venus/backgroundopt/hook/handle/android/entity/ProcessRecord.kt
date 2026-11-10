@@ -345,7 +345,15 @@ class ProcessRecord(
         @JvmStatic
         fun getProcessStateRecord(
             processRecord: Any
-        ): Any = processRecord.getObjectFieldValue(FieldConstants.mState)!!
+        ): Any {
+            // HyperOS 4 / Android 17: ProcessStateRecord 类被删除, 状态字段并入
+            // psc.ProcessRecordInternal, 此时 mState 取不到, 直接返回 ProcessRecord 自身。
+            return try {
+                processRecord.getObjectFieldValue(FieldConstants.mState) ?: processRecord
+            } catch (ignore: Throwable) {
+                processRecord
+            }
+        }
 
         @JvmStatic
         @AndroidMethod

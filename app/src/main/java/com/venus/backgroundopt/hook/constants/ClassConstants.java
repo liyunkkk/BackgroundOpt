@@ -51,6 +51,8 @@ public interface ClassConstants {
     String ProcessRecord = "com.android.server.am.ProcessRecord";
     String ProcessStateRecord = "com.android.server.am.ProcessStateRecord";
     String OomAdjuster = "com.android.server.am.OomAdjuster";
+    // HyperOS 4 / Android 17 (SDK 37): OomAdjuster 下沉到 psc 子包
+    String PscOomAdjuster = "com.android.server.am.psc.OomAdjuster";
     String DeviceConfig = "android.provider.DeviceConfig";
     String PackageManagerService = "com.android.server.pm.PackageManagerService";
     String PackageManagerServiceInjector = "com.android.server.pm.PackageManagerServiceInjector";

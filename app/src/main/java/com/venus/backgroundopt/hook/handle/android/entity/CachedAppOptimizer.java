@@ -215,6 +215,9 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
      * 初次使用时创建, 进程移除时进行关闭。
      */
     private final Map<Integer, FileOutputStream> compactOutputStreamMap = new ConcurrentHashMap<>();
+
+    /** HyperOS 4: memcg 回收句柄, 以 uid 为键 */
+    private final Map<Integer, FileOutputStream> memcgReclaimStreamMap = new ConcurrentHashMap<>();
     /**
      * 向内存压缩节点写入的值的字节流 <br>
      * 以便在使用时不需要重复性的进行 字符->字节数组 的转换
@@ -277,6 +280,61 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
             } catch (Throwable ignore) {
             }
         }
-        return false;
+
+        // HyperOS 4 / Android 17 (SDK 37) 适配:
+        // 该内核不再提供 /proc/<pid>/reclaim, 小米改用 memcg 接口
+        // /dev/memcg/mimd/uid_<uid>/memory.reclaim_once 触发回收。
+        return reclaimViaMemcg(pid);
+    }
+
+    private boolean reclaimViaMemcg(int pid) {
+        try {
+            int uid = getUidOfProcess(pid);
+            if (uid < 0) {
+                return false;
+            }
+
+            FileOutputStream out = memcgReclaimStreamMap.computeIfAbsent(uid, key -> {
+                try {
+                    return new FileOutputStream(
+                            "/dev/memcg/mimd/uid_" + key + "/memory.reclaim_once"
+                    );
+                } catch (Throwable t) {
+                    return null;
+                }
+            });
+
+            if (out == null) {
+                return false;
+            }
+
+            try {
+                out.write("1".getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                return true;
+            } catch (Throwable t) {
+                memcgReclaimStreamMap.remove(uid);
+                return false;
+            }
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private int getUidOfProcess(int pid) {
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.FileReader("/proc/" + pid + "/status"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith("Uid:")) {
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length > 1) {
+                        return Integer.parseInt(parts[1]);
+                    }
+                }
+            }
+        } catch (Throwable ignore) {
+        }
+        return -1;
     }
 }

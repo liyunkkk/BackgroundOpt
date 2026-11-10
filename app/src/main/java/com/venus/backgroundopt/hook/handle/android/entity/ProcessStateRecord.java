@@ -49,7 +49,13 @@ public class ProcessStateRecord {
 
     @AndroidObject
     public static Object getProcessRecord(@AndroidObject Object processStateRecord) {
-        return XposedHelpers.getObjectField(processStateRecord, FieldConstants.mApp);
+        // HyperOS 4 / Android 17: ProcessStateRecord 已不存在, 传入对象即 ProcessRecord
+        try {
+            Object app = XposedHelpers.getObjectField(processStateRecord, FieldConstants.mApp);
+            return app != null ? app : processStateRecord;
+        } catch (Throwable ignore) {
+            return processStateRecord;
+        }
     }
 
     public void setCurrentSchedulingGroup(int curSchedGroup) {
