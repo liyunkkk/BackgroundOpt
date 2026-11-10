@@ -51,8 +51,28 @@ public interface ClassConstants {
     String ProcessRecord = "com.android.server.am.ProcessRecord";
     String ProcessStateRecord = "com.android.server.am.ProcessStateRecord";
     String OomAdjuster = "com.android.server.am.OomAdjuster";
-    // HyperOS 4 / Android 17 (SDK 37): OomAdjuster 下沉到 psc 子包
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, {@link #OomAdjuster} 被移动到 psc 子包。
+     * 原 com.android.server.am.OomAdjuster 不存在, 改为 com.android.server.am.psc.OomAdjuster。
+     */
     String PscOomAdjuster = "com.android.server.am.psc.OomAdjuster";
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, OomAdjusterModernImpl 改名为 psc.OomAdjusterImpl。
+     */
+    String PscOomAdjusterImpl = "com.android.server.am.psc.OomAdjusterImpl";
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, ProcessStateRecord 类被删除,
+     * 其 oom/procstate 字段与方法并入 ProcessRecord 的父类 psc.ProcessRecordInternal。
+     */
+    String PscProcessRecordInternal = "com.android.server.am.psc.ProcessRecordInternal";
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, ProcessList 的父类变为 psc.ProcessListInternal。
+     */
+    String PscProcessListInternal = "com.android.server.am.psc.ProcessListInternal";
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, 原 ProcessList 内的 ADJ 常量被搬到 psc.Constants。
+     */
+    String PscConstants = "com.android.server.am.psc.Constants";
     String DeviceConfig = "android.provider.DeviceConfig";
     String PackageManagerService = "com.android.server.pm.PackageManagerService";
     String PackageManagerServiceInjector = "com.android.server.pm.PackageManagerServiceInjector";
@@ -85,6 +105,16 @@ public interface ClassConstants {
      */
     String PowerStateMachine = "com.miui.powerkeeper.statemachine.PowerStateMachine";
     String SleepModeControllerNew = "com.miui.powerkeeper.statemachine.SleepModeControllerNew";
+    /**
+     * HyperOS 4 起, SleepModeControllerNew 已不存在,
+     * 手机端改为 com.miui.powerkeeper.statemachine.PhoneSleepModeController。
+     */
+    String PhoneSleepModeController = "com.miui.powerkeeper.statemachine.PhoneSleepModeController";
+    /**
+     * HyperOS 4 起, SleepModeControllerNew 已不存在,
+     * 平板端改为 com.miui.powerkeeper.statemachine.PadSleepModeController。
+     */
+    String PadSleepModeController = "com.miui.powerkeeper.statemachine.PadSleepModeController";
     String ProcessManager = "miui.process.ProcessManager";
     String ProcessConfig = "miui.process.ProcessConfig";
 }

@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-                    
+
  package com.venus.backgroundopt.hook.handle.android
 
 import android.os.Build
@@ -33,11 +33,14 @@ class ProcessListHookNew(
     runningInfo: RunningInfo?
 ) : IHook(classLoader, runningInfo) {
     override fun hook() {
+        // HyperOS 4 / Android 17 (SDK 37) 起, killAppIfBgRestrictedAndCachedIdleLocked
+        // 的签名发生变化, 不再匹配固定的 paramTypes。改为按方法名 hook (hookAllMethod),
+        // 由系统自行匹配所有重载, 避免因签名不符导致 hook 失败。
         ClassConstants.ProcessList.beforeHook(
             enable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
             classLoader = classLoader,
             methodName = MethodConstants.killAppIfBgRestrictedAndCachedIdleLocked,
-            paramTypes = arrayOf(ClassConstants.ProcessRecord, Long::class.javaPrimitiveType)
+            hookAllMethod = true,
         ) { it.result = 0L }
     }
 }

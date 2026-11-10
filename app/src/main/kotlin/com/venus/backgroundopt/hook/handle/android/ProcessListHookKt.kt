@@ -34,12 +34,12 @@ import com.venus.backgroundopt.hook.handle.android.entity.ActivityManager
 import com.venus.backgroundopt.hook.handle.android.entity.ProcessList
 import com.venus.backgroundopt.hook.handle.android.entity.ProcessRecord
 import com.venus.backgroundopt.hook.handle.android.entity.ProcessRecord.AdjHandleActionType
-import com.venus.backgroundopt.utils.SystemUtils
-import com.venus.backgroundopt.utils.beforeHook
 import com.venus.backgroundopt.utils.clamp
 import com.venus.backgroundopt.utils.concurrent.lock
 import com.venus.backgroundopt.utils.getBooleanFieldValue
 import com.venus.backgroundopt.utils.getObjectFieldValue
+import com.venus.backgroundopt.utils.SystemUtils
+import com.venus.backgroundopt.utils.beforeHook
 import com.venus.backgroundopt.utils.ifTrue
 import com.venus.backgroundopt.utils.log.logInfo
 import com.venus.backgroundopt.utils.message.handle.AppOptimizePolicyMessageHandler.AppOptimizePolicy
@@ -195,12 +195,16 @@ class ProcessListHookKt(
     }
 
     /**
-     * HyperOS 4 / Android 17 (SDK 37) 适配: 接管 adj 应用。
+     * HyperOS 4 / Android 17 (SDK 37) 起, 框架应用 adj 的路径变了:
      *
-     * 实测该 ROM 上 ProcessList#setOomAdj 与 OomAdjuster$Injector#setOomAdj 从不被调用,
-     * 框架只走 psc.OomAdjuster#applyOomAdjLSP(ProcessRecordInternal, boolean)。
-     * 因此在这里、框架写内核之前, 把模块算出的 adj 写回框架的 ProcessRecord(curAdj),
-     * 由系统用它自己的通道(lmkd/ummd/memcg)写入内核。
+     * 实测(探针日志) `com.android.server.am.ProcessList#setOomAdj` 与
+     * `psc.OomAdjuster$Injector#setOomAdj` 从未被调用, 真正被调用的只有
+     * `psc.OomAdjuster#applyOomAdjLSP(ProcessRecordInternal, boolean)`。
+     * 因此模块原来「拦截 setOomAdj 再自己写 lmkd」的做法完全失效。
+     *
+     * 这里改为: 在框架应用 adj 之前, 把模块算出的值直接写回框架的 ProcessRecord(curAdj),
+     * 之后由系统用它自己的方式(lmkd / ummd / procfs)写入内核。
+     * 这样不依赖具体 ROM 的写内核实现。
      */
     override fun hook() {
         super.hook()
@@ -217,16 +221,16 @@ class ProcessListHookKt(
                     logger.warn("applyOomAdjLSP 接管失败", t)
                 }
             }
+            logger.info("已接管 [${SystemUtils.oomAdjusterClassName}#applyOomAdjLSP]")
         } catch (t: Throwable) {
             logger.warn("applyOomAdjLSP hook 安装失败", t)
         }
     }
 
-    @Volatile
-    private var lastApplyOomAdjLogTime: Long = 0L
-
     /**
-     * 用模块策略覆盖框架即将写入内核的 adj
+     * 在框架把 adj 写入内核之前, 用模块的策略覆盖它。
+     *
+     * @param frameworkProcessRecord 框架的 ProcessRecord (psc.ProcessRecordInternal)
      */
     fun handleApplyOomAdjLSP(frameworkProcessRecord: Any?) {
         frameworkProcessRecord ?: return
@@ -278,7 +282,8 @@ class ProcessListHookKt(
 
         process.oomAdjScore = adjWillSet
 
-        // 与原有 setOomAdj 路径一致: 驱动「内存回收 / 内存压缩」
+        // 与原有 setOomAdj 路径保持一致: 这里同样要驱动「内存回收 / 内存压缩」。
+        // 否则 UI 上「待压缩进程列表」的“上次执行结果”永远是空的。
         try {
             if (appGroupEnum == AppGroupEnum.NONE && process.mainProcess) {
                 runningInfo.handleActivityEventChangeLocked(
@@ -302,12 +307,17 @@ class ProcessListHookKt(
             state.curAdj = finalApplyAdj
 
             val nowMs = System.currentTimeMillis()
-            if (nowMs - lastApplyOomAdjLogTime > 5000) {
+            if (nowMs - lastApplyOomAdjLogTime > 3000) {
                 lastApplyOomAdjLogTime = nowMs
-                logger.info("接管adj: ${process.packageName} pid=$pid $curAdj -> $finalApplyAdj")
+                com.venus.backgroundopt.utils.BgDebugLog.log(
+                    "接管adj: pkg=${process.packageName} pid=$pid system=$curAdj -> module=$finalApplyAdj"
+                )
             }
         }
     }
+
+    @Volatile
+    private var lastApplyOomAdjLogTime: Long = 0L
 
     override fun getHookPoint(): Array<HookPoint> {
         return arrayOf(
@@ -453,9 +463,24 @@ class ProcessListHookKt(
         }
     }
 
+    @Volatile
+    private var lastSetOomAdjLogTime: Long = 0L
+
+    @Volatile
+    private var lastApplyLogTime: Long = 0L
+
+    @Volatile
+    private var lastApplyLogTime2: Long = 0L
+
     private val adjHandleActionPool = Executors.newFixedThreadPool(3)
     private fun addAdjHandleAction(block: () -> Unit) {
-        adjHandleActionPool.execute(block)
+        adjHandleActionPool.execute {
+            try {
+                block()
+            } catch (t: Throwable) {
+                com.venus.backgroundopt.utils.BgDebugLog.log("addAdjHandleAction FAILED", t)
+            }
+        }
     }
 
     private class AdjComputeAndApplyActionPoolThreadFactory : ThreadFactory {
@@ -512,6 +537,15 @@ class ProcessListHookKt(
 
     private fun handleSetOomAdj(param: MethodHookParam) {
         val pid = param.args[0] as Int
+        // HyperOS4 适配期诊断: 确认 setOomAdj hook 是否真的被框架调用(限流输出)
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastSetOomAdjLogTime > 3000) {
+            lastSetOomAdjLogTime = nowMs
+            com.venus.backgroundopt.utils.BgDebugLog.log(
+                "setOomAdj called: pid=$pid uid=${param.args[1]} adj=${param.args[2]}" +
+                    " hasRecord=${runningInfo.getRunningProcess(pid) != null}"
+            )
+        }
         // 获取当前进程对象
         val process = runningInfo.getRunningProcess(pid) ?: return
         val appInfo = process.appInfo
@@ -615,6 +649,16 @@ class ProcessListHookKt(
         // 记录本次系统计算的分数
         process.oomAdjScore = adjWillSet
 
+        // HyperOS4 适配期诊断(限流)
+        val nowApply = System.currentTimeMillis()
+        if (nowApply - lastApplyLogTime > 3000) {
+            lastApplyLogTime = nowApply
+            com.venus.backgroundopt.utils.BgDebugLog.log(
+                "adj computed: pkg=${process.packageName} pid=$pid adjWillSet=$adjWillSet" +
+                    " main=$mainProcess type=$adjHandleActionType group=$appGroupEnum"
+            )
+        }
+
         // ProcessListHookKt.handleHandleProcessStartedLocked 执行后, 生成进程所属的appInfo
         // 但并没有将其设置内存分组。若在进程创建时就设置appInfo的内存分组, 则在某些场景下会产生额外消耗。
         // 例如, 在打开新app时, 会首先创建进程, 紧接着显示界面。分别会执行: ①ProcessListHookKt.handleHandleProcessStartedLocked
@@ -670,10 +714,21 @@ class ProcessListHookKt(
     }
 
     private fun applyFinalAdjUseCachedByteBuffer(pid: Int, uid: Int, adj: Int) {
-        val threadLocal = AdjComputeAndApplyActionPoolThreadFactory.threadLocalMap[Thread.currentThread()]!!
-        val byteBuffer = threadLocal.get()!!
-        ProcessList.writeLmkd(byteBuffer, pid, uid, adj)
-        byteBuffer.clear()
+        try {
+            val threadLocal = AdjComputeAndApplyActionPoolThreadFactory.threadLocalMap[Thread.currentThread()]!!
+            val byteBuffer = threadLocal.get()!!
+            val ok = ProcessList.writeLmkd(byteBuffer, pid, uid, adj)
+            byteBuffer.clear()
+            val nowMs2 = System.currentTimeMillis()
+            if (nowMs2 - lastApplyLogTime2 > 3000) {
+                lastApplyLogTime2 = nowMs2
+                com.venus.backgroundopt.utils.BgDebugLog.log(
+                    "writeLmkd pid=$pid uid=$uid adj=$adj result=$ok"
+                )
+            }
+        } catch (t: Throwable) {
+            com.venus.backgroundopt.utils.BgDebugLog.log("applyFinalAdj FAILED pid=$pid adj=$adj", t)
+        }
     }
 
     private fun autoApplyAdjHandleAction(
@@ -969,6 +1024,15 @@ class ProcessListHookKt(
      *                                                                         *
      **************************************************************************/
     fun handleHandleProcessStartedLocked(param: MethodHookParam) {
+        // HyperOS 4 适配: 这里一旦抛异常, 进程表就永远是空的(界面列表空白), 因此单独兜住并落文件日志
+        try {
+            handleHandleProcessStartedLockedImpl(param)
+        } catch (t: Throwable) {
+            com.venus.backgroundopt.utils.BgDebugLog.log("handleProcessStartedLocked FAILED", t)
+        }
+    }
+
+    private fun handleHandleProcessStartedLockedImpl(param: MethodHookParam) {
         if (!(param.result as Boolean)) {
             return
         }

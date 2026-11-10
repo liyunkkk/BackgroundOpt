@@ -36,6 +36,7 @@ import com.venus.backgroundopt.hook.handle.android.entity.Process.PROC_NEWLINE_T
 import com.venus.backgroundopt.hook.handle.android.entity.Process.PROC_OUT_LONG
 import com.venus.backgroundopt.hook.handle.android.isHighPriorityProcessByBasicProperty
 import com.venus.backgroundopt.utils.PackageUtils
+import com.venus.backgroundopt.utils.SystemUtils
 import com.venus.backgroundopt.utils.callMethod
 import com.venus.backgroundopt.utils.getBooleanFieldValue
 import com.venus.backgroundopt.utils.getIntFieldValue
@@ -267,7 +268,7 @@ class ProcessRecord(
          * 获取当前oom_adj_score
          *
          * @param pid 要查询的进程的pid
-         * @return 进程的oom_adj_score
+         * @return 进程的oom_score_adj
          */
         @JvmStatic
         fun getCurAdjNative(pid: Int): Int {
@@ -342,12 +343,21 @@ class ProcessRecord(
             processRecord: Any
         ): Any? = processRecord.getObjectFieldValue(FieldConstants.mOptRecord)
 
+        /**
+         * 获取 ProcessStateRecord 对象。
+         *
+         * HyperOS 4 / Android 17 (SDK 37) 起, ProcessStateRecord 类被删除,
+         * 其字段与方法并入 ProcessRecord 的父类 psc.ProcessRecordInternal,
+         * 因此 psc 布局下直接返回传入的 ProcessRecord 自身。
+         */
         @JvmStatic
         fun getProcessStateRecord(
             processRecord: Any
         ): Any {
-            // HyperOS 4 / Android 17: ProcessStateRecord 类被删除, 状态字段并入
-            // psc.ProcessRecordInternal, 此时 mState 取不到, 直接返回 ProcessRecord 自身。
+            // 以「能否取到 mState 字段」为准做运行时判定, 不依赖类探测:
+            // HyperOS 4 / Android 17 (SDK 37) 起 ProcessStateRecord 类被删除,
+            // 状态字段并入 psc.ProcessRecordInternal, 此时 mState 取不到,
+            // 直接返回 ProcessRecord 自身 (XposedHelpers 会沿父类查找字段/方法)。
             return try {
                 processRecord.getObjectFieldValue(FieldConstants.mState) ?: processRecord
             } catch (ignore: Throwable) {

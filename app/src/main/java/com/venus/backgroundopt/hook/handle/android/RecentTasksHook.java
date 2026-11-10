@@ -14,7 +14,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-                    
+
  package com.venus.backgroundopt.hook.handle.android;
 
 import com.venus.backgroundopt.core.RunningInfo;
@@ -46,12 +46,8 @@ public class RecentTasksHook extends MethodHook {
                         MethodConstants.isInVisibleRange,
                         new HookAction[]{
                                 (BeforeHookAction) this::handleIsInVisibleRange
-                        },
-                        ClassConstants.Task,
-                        int.class,
-                        int.class,
-                        boolean.class
-                ),
+                        }
+                ).setHookAllMatchedMethod(true),
                 new HookPoint(
                         ClassConstants.RecentTasks,
                         MethodConstants.trimInactiveRecentTasks,
@@ -62,9 +58,20 @@ public class RecentTasksHook extends MethodHook {
         };
     }
 
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, isInVisibleRange 的签名从
+     * (Task, int, int, boolean) 变为 (Task, int, boolean),
+     * 去掉 paramTypes 按方法名 hook 后, 需要根据参数个数自适应处理。
+     */
     private Object handleIsInVisibleRange(XC_MethodHook.MethodHookParam param) {
-        // 将可见窗口数(numVisibleTasks)设置为0
-        param.args[2] = 0;
+        int argCount = param.args.length;
+        if (argCount >= 4) {
+            // 旧签名: (Task, int numVisibleTasks, int, boolean), 将可见窗口数设为0
+            param.args[2] = 0;
+        } else if (argCount == 3) {
+            // 新签名: (Task, int numVisibleTasks, boolean), 将可见窗口数设为0
+            param.args[1] = 0;
+        }
 
         return null;
     }

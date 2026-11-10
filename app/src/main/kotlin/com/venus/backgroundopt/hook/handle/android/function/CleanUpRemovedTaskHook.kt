@@ -29,6 +29,7 @@ import com.venus.backgroundopt.hook.constants.MethodConstants
 import com.venus.backgroundopt.hook.handle.android.entity.ActivityManager
 import com.venus.backgroundopt.hook.handle.android.entity.ApplicationExitInfo
 import com.venus.backgroundopt.hook.handle.android.entity.ProcessList
+import com.venus.backgroundopt.hook.handle.android.entity.ProcessRecord
 import com.venus.backgroundopt.utils.SystemUtils
 import com.venus.backgroundopt.utils.afterHook
 import com.venus.backgroundopt.utils.beforeHook
@@ -187,9 +188,9 @@ class CleanUpRemovedTaskHook(
                                 methodName = MethodConstants.numberOfCurReceivers
                             ) as Int
                             if (numberOfCurReceivers == 0) {
-                                val processStateRecord = processRecord.getObjectFieldValue(
-                                    fieldName = FieldConstants.mState
-                                )!!
+                                // HyperOS 4 / Android 17 (SDK 37) 起 ProcessStateRecord 被删除,
+                                // 不能直接反射 mState 字段, 改用 ProcessRecord.getProcessStateRecord 统一获取
+                                val processStateRecord = ProcessRecord.getProcessStateRecord(processRecord)
                                 helpKillProcessesForRemovedTask(processStateRecord)
                             }
                         }

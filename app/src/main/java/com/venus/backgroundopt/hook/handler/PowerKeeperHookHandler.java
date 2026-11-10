@@ -14,10 +14,12 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-                    
+
  package com.venus.backgroundopt.hook.handler;
 
 import com.venus.backgroundopt.hook.base.PackageHook;
+import com.venus.backgroundopt.hook.handle.miui.PadSleepModeControllerHook;
+import com.venus.backgroundopt.hook.handle.miui.PhoneSleepModeControllerHook;
 import com.venus.backgroundopt.hook.handle.miui.PowerStateMachineHook;
 import com.venus.backgroundopt.hook.handle.miui.ProcessManagerHook;
 import com.venus.backgroundopt.hook.handle.miui.SleepModeControllerNewHook;
@@ -41,6 +43,10 @@ public class PowerKeeperHookHandler extends PackageHook {
 
         new PowerStateMachineHook(classLoader);
         new ProcessManagerHook(classLoader);
+        // HyperOS 4 以下使用旧版 SleepModeControllerNew, 保留不动
         new SleepModeControllerNewHook(classLoader);
+        // HyperOS 4 起手机/平板分别使用 Phone/PadSleepModeController, 类不存在时 HookPoint 内部会静默跳过
+        new PhoneSleepModeControllerHook(classLoader);
+        new PadSleepModeControllerHook(classLoader);
     }
 }

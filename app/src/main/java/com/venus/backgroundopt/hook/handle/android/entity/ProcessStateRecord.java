@@ -24,6 +24,7 @@ import com.venus.backgroundopt.annotation.AndroidObject;
 import com.venus.backgroundopt.hook.constants.ClassConstants;
 import com.venus.backgroundopt.hook.constants.FieldConstants;
 import com.venus.backgroundopt.hook.constants.MethodConstants;
+import com.venus.backgroundopt.utils.SystemUtils;
 import com.venus.backgroundopt.utils.XposedUtilsKt;
 
 import de.robv.android.xposed.XposedHelpers;
@@ -47,9 +48,18 @@ public class ProcessStateRecord {
         this.processStateRecord = processStateRecord;
     }
 
+    /**
+     * 从 ProcessStateRecord 中获取其所属的 ProcessRecord。
+     *
+     * HyperOS 4 / Android 17 (SDK 37) 起, ProcessStateRecord 类被删除,
+     * 传入的对象本身就是 ProcessRecord (psc.ProcessRecordInternal),
+     * 因此 psc 布局下直接返回传入对象自身。
+     */
     @AndroidObject
     public static Object getProcessRecord(@AndroidObject Object processStateRecord) {
-        // HyperOS 4 / Android 17: ProcessStateRecord 已不存在, 传入对象即 ProcessRecord
+        // 以「能否取到 mApp 字段」为准做运行时判定, 不依赖类探测:
+        // HyperOS 4 / Android 17 (SDK 37) 起 ProcessStateRecord 类被删除,
+        // 传入的对象本身就是 ProcessRecord, 此时 mApp 取不到, 直接返回自身。
         try {
             Object app = XposedHelpers.getObjectField(processStateRecord, FieldConstants.mApp);
             return app != null ? app : processStateRecord;

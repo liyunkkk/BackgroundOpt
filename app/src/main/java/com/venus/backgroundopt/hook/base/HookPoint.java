@@ -137,6 +137,8 @@ public class HookPoint implements ILogger {
         } catch (Throwable t) {
             if (!dontPrintLogHookList.contains(hookClassName + "." + hookMethodName)) {
                 getLogger().error("[" + hookClassName + "." + hookMethodName + "]hook失败", t);
+                com.venus.backgroundopt.utils.BgDebugLog.log(
+                        "hookPoint FAILED: " + hookClassName + "." + hookMethodName, t);
             }
         }
     }

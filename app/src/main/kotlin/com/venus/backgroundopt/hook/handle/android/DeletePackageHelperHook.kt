@@ -14,10 +14,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-                    
+
  package com.venus.backgroundopt.hook.handle.android
 
-import android.os.UserHandle
 import com.venus.backgroundopt.BuildConfig
 import com.venus.backgroundopt.core.RunningInfo
 import com.venus.backgroundopt.hook.base.HookPoint
@@ -51,6 +50,8 @@ class DeletePackageHelperHook(
 //                Int::class.java,    /* deleteFlags */
 //                Boolean::class.java /* removedBySystem */
 //            ),
+            // HyperOS 4 / Android 17 (SDK 37) 起, deletePackageLIF 的签名发生变化,
+            // 去掉 paramTypes 按方法名 hook, 避免因签名不符导致 hook 失败。
             HookPoint(
                 ClassConstants.DeletePackageHelper,
                 MethodConstants.deletePackageLIF,
@@ -59,14 +60,7 @@ class DeletePackageHelperHook(
                         handleDeletePackageLIF(it)
                     }
                 ),
-                String::class.java,                 /* packageName */
-                UserHandle::class.java,             /* user */
-                Boolean::class.java,                /* deleteCodeAndResources */
-                IntArray::class.java,               /* allUserHandles */
-                Int::class.java,                    /* flags */
-                ClassConstants.PackageRemovedInfo,  /* outInfo */
-                Boolean::class.java                 /* writeSettings */
-            ),
+            ).setHookAllMatchedMethod(true),
         )
     }
 
@@ -83,7 +77,8 @@ class DeletePackageHelperHook(
     private fun handleDeletePackageLIF(param: MethodHookParam) {
         val args = param.args
         val packageName = args[0] as String
-        val userIds = args[3] as IntArray
+        // 签名变化后, allUserHandles 的位置可能不同, 做防御性处理
+        val userIds = args.getOrNull(3) as? IntArray ?: return
 
         userIds.forEach { userId ->
             runningInfo.removeRecordedFindAppResult(userId, packageName)

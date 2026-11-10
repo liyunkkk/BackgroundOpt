@@ -174,8 +174,11 @@ class DefaultApplicationManager {
                 return null
             }
 
+            // AMS.mContext 在异常情况下可能取不到, 这里做空值保护
+            val context = RunningInfo.getInstance().activityManagerService.context ?: return null
+
             return Settings.Secure.getString(
-                RunningInfo.getInstance().activityManagerService.context.contentResolver,
+                context.contentResolver,
                 key
             )
         }

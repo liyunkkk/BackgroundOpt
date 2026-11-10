@@ -67,14 +67,19 @@ class CachedAppOptimizerHook(
             classLoader = classLoader,
             methodName = MethodConstants.updateFreezerDebounceTimeout,
         ) {
-            val cachedAppOptimizerInstance =
-                runningInfo.activityManagerService.oomAdjuster.cachedAppOptimizer.originalInstance
-            val fieldValue =
-                cachedAppOptimizerInstance.getLongFieldValue(FieldConstants.mFreezerDebounceTimeout)
-            runningInfo.activityManagerService.oomAdjuster.cachedAppOptimizer.mFreezerDebounceTimeout =
-                fieldValue
+            // HyperOS 4 / Android 17 起 oomAdjuster / cachedAppOptimizer 可能为 null
+            // (字段被移动到 AMS 或布局变化), 取不到时只记日志并跳过, 不允许抛异常
+            val cachedAppOptimizer = runningInfo.activityManagerService.oomAdjuster?.cachedAppOptimizer
+            if (cachedAppOptimizer == null) {
+                logger.warn("CachedAppOptimizer 不可用, 跳过 freeze 延迟时间调整")
+            } else {
+                val cachedAppOptimizerInstance = cachedAppOptimizer.originalInstance
+                val fieldValue =
+                    cachedAppOptimizerInstance.getLongFieldValue(FieldConstants.mFreezerDebounceTimeout)
+                cachedAppOptimizer.mFreezerDebounceTimeout = fieldValue
 
-            logger.info("系统freeze进程的延迟时间: ${fieldValue}")
+                logger.info("系统freeze进程的延迟时间: ${fieldValue}")
+            }
         }
     }
 }

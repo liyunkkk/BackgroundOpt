@@ -21,6 +21,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.venus.backgroundopt.annotation.AndroidMethod;
 import com.venus.backgroundopt.annotation.AndroidObject;
@@ -69,44 +70,110 @@ public class ActivityManagerService implements ILogger {
             RunningInfo runningInfo
     ) {
         this.activityManagerService = activityManagerService;
-        this.processList = new ProcessList(
-                XposedHelpers.getObjectField(activityManagerService, FieldConstants.mProcessList),
-                this);
-        this.context = (Context) XposedHelpers.getObjectField(activityManagerService, FieldConstants.mContext);
-        this.oomAdjuster = new OomAdjuster(
-                XposedHelpers.getObjectField(activityManagerService, FieldConstants.mOomAdjuster), classLoader);
-        this.mPidsSelfLocked = XposedHelpers.getObjectField(activityManagerService, FieldConstants.mPidsSelfLocked);
-        this.mProcLock = XposedHelpers.getObjectField(activityManagerService, FieldConstants.mProcLock);
-        this.activityManagerConstants = new ActivityManagerConstants(XposedUtilsKt.getObjectFieldValue(activityManagerService, FieldConstants.mConstants, null));
-
         this.runningInfo = runningInfo;
-
         activityManagerServiceClazz = activityManagerService.getClass();
+
+        // HyperOS 4 / Android 17 (SDK 37) 起框架类布局变化较大,
+        // 任何一个包装对象构造失败都不允许冒泡, 否则 RunningInfo.activityManagerService 为 null
+        // 导致全模块静默失效。因此这里逐个 try/catch, 失败仅记日志并置 null。
+        this.processList = initProcessList(activityManagerService);
+        this.context = initContext(activityManagerService);
+        this.oomAdjuster = initOomAdjuster(activityManagerService, classLoader);
+        this.mPidsSelfLocked = initFieldQuietly(activityManagerService, FieldConstants.mPidsSelfLocked);
+        this.mProcLock = initFieldQuietly(activityManagerService, FieldConstants.mProcLock);
+        this.activityManagerConstants = initActivityManagerConstants(activityManagerService);
+    }
+
+    @Nullable
+    private ProcessList initProcessList(Object ams) {
+        try {
+            Object mProcessList = XposedHelpers.getObjectField(ams, FieldConstants.mProcessList);
+            if (mProcessList != null) {
+                return new ProcessList(mProcessList, this);
+            }
+        } catch (Throwable t) {
+            getLogger().warn("ProcessList 包装对象构造失败, 进程列表相关功能不可用", t);
+        }
+        return null;
+    }
+
+    @Nullable
+    private Context initContext(Object ams) {
+        try {
+            return (Context) XposedHelpers.getObjectField(ams, FieldConstants.mContext);
+        } catch (Throwable t) {
+            getLogger().warn("AMS.mContext 获取失败", t);
+        }
+        return null;
+    }
+
+    @Nullable
+    private OomAdjuster initOomAdjuster(Object ams, ClassLoader classLoader) {
+        try {
+            Object mOomAdjuster = XposedHelpers.getObjectField(ams, FieldConstants.mOomAdjuster);
+            if (mOomAdjuster != null) {
+                // 传入 AMS 本身, 以便 psc 布局下 OomAdjuster 包装类可以从 AMS 回退取字段
+                return new OomAdjuster(mOomAdjuster, ams, classLoader);
+            }
+        } catch (Throwable t) {
+            getLogger().warn("OomAdjuster 包装对象构造失败, oom 调整相关功能不可用", t);
+        }
+        return null;
+    }
+
+    @Nullable
+    private ActivityManagerConstants initActivityManagerConstants(Object ams) {
+        try {
+            Object mConstants = XposedUtilsKt.getObjectFieldValue(ams, FieldConstants.mConstants, null);
+            if (mConstants != null) {
+                return new ActivityManagerConstants(mConstants);
+            }
+        } catch (Throwable t) {
+            getLogger().warn("ActivityManagerConstants 包装对象构造失败", t);
+        }
+        return null;
+    }
+
+    @Nullable
+    private Object initFieldQuietly(Object ams, String fieldName) {
+        try {
+            return XposedHelpers.getObjectField(ams, fieldName);
+        } catch (Throwable t) {
+            getLogger().warn("AMS 字段 [" + fieldName + "] 获取失败", t);
+        }
+        return null;
     }
 
     private final RunningInfo runningInfo;
 
+    @Nullable
     private final OomAdjuster oomAdjuster;
 
+    @Nullable
     public OomAdjuster getOomAdjuster() {
         return oomAdjuster;
     }
 
+    @Nullable
     private final ProcessList processList;
 
+    @Nullable
     public ProcessList getProcessList() {
         return processList;
     }
 
+    @Nullable
     private final Context context;
 
+    @Nullable
     public Context getContext() {
         return context;
     }
 
+    @Nullable
     private final ActivityManagerConstants activityManagerConstants;
 
-    @NonNull
+    @Nullable
     public ActivityManagerConstants getActivityManagerConstants() {
         return activityManagerConstants;
     }
@@ -115,6 +182,7 @@ public class ActivityManagerService implements ILogger {
             objectClassPath = ClassConstants.ActivityManagerService,
             fieldName = FieldConstants.mPidsSelfLocked
     )
+    @Nullable
     private final Object mPidsSelfLocked; // PidMap
 
     @NonNull
@@ -129,9 +197,11 @@ public class ActivityManagerService implements ILogger {
             objectClassPath = ClassConstants.ActivityManagerService,
             fieldName = FieldConstants.mProcLock
     )
+    @Nullable
     private final Object mProcLock;
 
     @AndroidObjectField
+    @Nullable
     public Object getmProcLock() {
         return mProcLock;
     }
@@ -373,21 +443,16 @@ public class ActivityManagerService implements ILogger {
             if (depth <= 2) {
                 mProcessRecord = findMProcessRecord(++depth, packageName, uid);
             } else {    // 保底措施, 遍历进程列表查找进程。效率不够高
-//                Object uidRecord = XposedHelpers.newInstance(
-//                        UidRecord.getUidRecordClass(classLoader),
-//                        uid,
-//                        activityManagerService.getActivityManagerService());
-//                Object process = XposedHelpers.callMethod(uidRecord, MethodConstants.getProcessInPackage, packageName);
-//                if (process != null) {
-//                    mProcessRecord = new ProcessRecord(process);
-//                } else {
-                mProcessRecord = processList.getMProcessRecordLocked(packageName);
-//                }
+                if (processList != null) {
+                    mProcessRecord = processList.getMProcessRecordLocked(packageName);
+                }
             }
         }
 
         // pid纠察
-        ProcessRecordKt.correctProcessPid(mProcessRecord);
+        if (mProcessRecord != null) {
+            ProcessRecordKt.correctProcessPid(mProcessRecord);
+        }
 
         return mProcessRecord;
     }

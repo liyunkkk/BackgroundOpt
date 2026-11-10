@@ -402,7 +402,13 @@ public class RunningInfo implements ILogger {
             );
             return null;
         }, () -> {*/
-        computeProcessIfAbsent(pid, proc, userId, uid, packageName);
+        try {
+            computeProcessIfAbsent(pid, proc, userId, uid, packageName);
+        } catch (Throwable t) {
+            com.venus.backgroundopt.utils.BgDebugLog.log(
+                    "RunningInfo.startProcess FAILED pid=" + pid + " pkg=" + packageName, t);
+            throw t;
+        }
             /*return null;
         });*/
     }

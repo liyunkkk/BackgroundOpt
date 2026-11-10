@@ -29,6 +29,7 @@ import com.venus.backgroundopt.utils.log.ILogger;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -89,6 +90,13 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
 
     private long mFullCompactRequest;
 
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, CachedAppOptimizer 上可能不存在
+     * mFullCompactRequest 字段, 直接 XposedHelpers.setLongField 会抛 NoSuchFieldError。
+     * 在构造时先探测该字段是否存在, 不存在则静默跳过写入。
+     */
+    private final boolean hasFullCompactRequestField;
+
     @AndroidObjectField(
             objectClassPath = ClassConstants.CachedAppOptimizer,
             fieldName = FieldConstants.mFreezerDebounceTimeout
@@ -101,10 +109,33 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
     public CachedAppOptimizer(@AndroidObject Object cachedAppOptimizer, ClassLoader classLoader) {
         this.cachedAppOptimizer = cachedAppOptimizer;
 
-        mCompactThrottleMinOomAdj =
-                XposedHelpers.getLongField(cachedAppOptimizer, FieldConstants.mCompactThrottleMinOomAdj);
-        mCompactThrottleMaxOomAdj =
-                XposedHelpers.getLongField(cachedAppOptimizer, FieldConstants.mCompactThrottleMaxOomAdj);
+        // 逐个字段 try/catch, HyperOS 4 上部分字段可能缺失
+        long minOomAdj = 0;
+        try {
+            minOomAdj = XposedHelpers.getLongField(cachedAppOptimizer, FieldConstants.mCompactThrottleMinOomAdj);
+        } catch (Throwable t) {
+            getLogger().debug("CachedAppOptimizer.mCompactThrottleMinOomAdj 获取失败");
+        }
+        mCompactThrottleMinOomAdj = minOomAdj;
+
+        long maxOomAdj = 0;
+        try {
+            maxOomAdj = XposedHelpers.getLongField(cachedAppOptimizer, FieldConstants.mCompactThrottleMaxOomAdj);
+        } catch (Throwable t) {
+            getLogger().debug("CachedAppOptimizer.mCompactThrottleMaxOomAdj 获取失败");
+        }
+        mCompactThrottleMaxOomAdj = maxOomAdj;
+
+        // 探测 mFullCompactRequest 字段是否存在
+        boolean found = false;
+        try {
+            Field field = XposedHelpers.findField(cachedAppOptimizer.getClass(), FieldConstants.mFullCompactRequest);
+            found = field != null;
+        } catch (Throwable t) {
+            // 字段不存在, 静默降级
+            getLogger().debug("CachedAppOptimizer 上无 mFullCompactRequest 字段, 将跳过同步");
+        }
+        hasFullCompactRequestField = found;
     }
 
     @NonNull
@@ -169,7 +200,14 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
         boolean oomAdjEnteredCached = isOomAdjEnteredCached(app);
 
         ++mFullCompactRequest;
-        XposedHelpers.setLongField(this.cachedAppOptimizer, FieldConstants.mFullCompactRequest, mFullCompactRequest);
+        // HyperOS 4 上该字段可能不存在, 先探测再写入, 不存在则静默跳过
+        if (hasFullCompactRequestField) {
+            try {
+                XposedHelpers.setLongField(this.cachedAppOptimizer, FieldConstants.mFullCompactRequest, mFullCompactRequest);
+            } catch (Throwable t) {
+                getLogger().debug("同步 mFullCompactRequest 字段失败");
+            }
+        }
         // Apply OOM adj score throttle for Full App Compaction.
         if (force || oomAdjEnteredCached) {
             app.getProcessCachedOptimizerRecord().setReqCompactAction(COMPACT_PROCESS_FULL);
@@ -216,7 +254,7 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
      */
     private final Map<Integer, FileOutputStream> compactOutputStreamMap = new ConcurrentHashMap<>();
 
-    /** HyperOS 4: memcg 回收句柄, 以 uid 为键 */
+    /** HyperOS 4: memcg 回收接口句柄, 以 uid 为键 */
     private final Map<Integer, FileOutputStream> memcgReclaimStreamMap = new ConcurrentHashMap<>();
     /**
      * 向内存压缩节点写入的值的字节流 <br>
@@ -282,11 +320,18 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
         }
 
         // HyperOS 4 / Android 17 (SDK 37) 适配:
-        // 该内核不再提供 /proc/<pid>/reclaim, 小米改用 memcg 接口
-        // /dev/memcg/mimd/uid_<uid>/memory.reclaim_once 触发回收。
+        // 该内核不再提供 /proc/<pid>/reclaim (实测连 init 都没有此文件),
+        // 小米改用 memcg 接口 /dev/memcg/mimd/uid_<uid>/memory.reclaim_once 触发回收。
+        // 不做这个兜底的话, 内存压缩永远返回 problem, UI 上「上次执行结果」不会出现对勾。
         return reclaimViaMemcg(pid);
     }
 
+    /**
+     * 通过小米的 memcg 接口触发一次内存回收
+     *
+     * @param pid 目标进程
+     * @return 是否写入成功
+     */
     private boolean reclaimViaMemcg(int pid) {
         try {
             int uid = getUidOfProcess(pid);
@@ -313,6 +358,7 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
                 out.flush();
                 return true;
             } catch (Throwable t) {
+                // 句柄可能已失效, 丢弃后下次重开
                 memcgReclaimStreamMap.remove(uid);
                 return false;
             }
@@ -321,6 +367,9 @@ public class CachedAppOptimizer implements ILogger, IAndroidEntity {
         }
     }
 
+    /**
+     * 读取进程所属 uid
+     */
     private int getUidOfProcess(int pid) {
         try (java.io.BufferedReader reader = new java.io.BufferedReader(
                 new java.io.FileReader("/proc/" + pid + "/status"))) {

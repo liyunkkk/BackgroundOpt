@@ -37,6 +37,7 @@ import com.venus.backgroundopt.hook.handle.android.PackageManagerServiceHookKt;
 import com.venus.backgroundopt.hook.handle.android.PackageManagerServiceHookNew;
 import com.venus.backgroundopt.hook.handle.android.PhantomProcessListHook;
 import com.venus.backgroundopt.hook.handle.android.PowerManagerServiceHook;
+import com.venus.backgroundopt.hook.handle.android.OomAdjProbeHook;
 import com.venus.backgroundopt.hook.handle.android.ProcessListHookKt;
 import com.venus.backgroundopt.hook.handle.android.ProcessListHookNew;
 import com.venus.backgroundopt.hook.handle.android.ProcessRecordHook;
@@ -50,7 +51,7 @@ import com.venus.backgroundopt.hook.handle.android.function.DefaultApplicationCh
 
 import java.util.HashMap;
 
-import de.robv.android.xposed.XposedBridge;
+import com.venus.backgroundopt.utils.BgDebugLog;
 
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
@@ -124,16 +125,18 @@ public class AndroidHookHandler extends PackageHook {
         safeHook("WindowProcessControllerHook", () -> new WindowProcessControllerHook(classLoader, runningInfo));
         safeHook("DefaultApplicationChangeHook", () -> new DefaultApplicationChangeHook(classLoader, runningInfo));
         safeHook("CleanUpRemovedTaskHook", () -> new CleanUpRemovedTaskHook(classLoader, runningInfo));
+        safeHook("OomAdjProbeHook", () -> new OomAdjProbeHook(classLoader, runningInfo));
     }
 
     /**
      * HyperOS 4 适配: 单个 hook 类注册失败时, 不允许影响后续 hook 的注册。
+     * 之前的写法是直接 new, 一旦某个类初始化抛异常, 后面所有 hook 都不会注册。
      */
     private void safeHook(String name, Runnable runnable) {
         try {
             runnable.run();
         } catch (Throwable t) {
-            XposedBridge.log("[BackgroundOpt] hook 注册失败: " + name + " : " + t);
+            BgDebugLog.log("register FAILED: " + name, t);
         }
     }
 

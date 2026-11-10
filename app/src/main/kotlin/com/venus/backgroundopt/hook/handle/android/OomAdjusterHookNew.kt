@@ -52,13 +52,22 @@ class OomAdjusterHookNew(
     classLoader: ClassLoader?,
     runningInfo: RunningInfo?
 ) : IHook(classLoader, runningInfo) {
-    private lateinit var oomAdjuster: Any
-    private lateinit var mProcessList: Any
-    private lateinit var mConstants: Any
+    /**
+     * HyperOS 4 / Android 17 (SDK 37) 起, OomAdjuster 被移动到 psc 子包,
+     * 原 com.android.server.am.OomAdjuster 不存在。这里通过 SystemUtils.oomAdjusterClassName
+     * 在运行时解析正确的类名, 避免硬编码导致 ClassNotFoundError。
+     */
+    private val oomAdjusterClassName: String
+        get() = SystemUtils.oomAdjusterClassName
+
+    // 以下字段在 HyperOS 4 上可能缺失, 因此全部改为可空, 并在构造回调中逐个 try/catch
+    private var oomAdjuster: Any? = null
+    private var mProcessList: Any? = null
+    private var mConstants: Any? = null
 
     // List<ProcessRecord>
-    private lateinit var lruList: List<*>
-    private lateinit var mAppProfiler: Any
+    private var lruList: List<*>? = null
+    private var mAppProfiler: Any? = null
 
     private fun applyOomAdjLSP(
         processRecord: Any,
@@ -83,7 +92,7 @@ class OomAdjusterHookNew(
     private val applyOomAdjLSPMethod by lazy {
         if (hasOomAdjReasonField) {
             { processRecord: Any, now: Long, nowElapsed: Long, oomAdjReason: Any? ->
-                oomAdjuster.callMethod(
+                oomAdjuster?.callMethod(
                     methodName = MethodConstants.applyOomAdjLSP,
                     processRecord,
                     true,
@@ -94,7 +103,7 @@ class OomAdjusterHookNew(
             }
         } else {
             { processRecord: Any, now: Long, nowElapsed: Long, _: Any? ->
-                oomAdjuster.callMethod(
+                oomAdjuster?.callMethod(
                     methodName = MethodConstants.applyOomAdjLSP,
                     processRecord,
                     true,
@@ -139,36 +148,64 @@ class OomAdjusterHookNew(
 
     override fun hook() {
         // 拿到一些必要的变量
-        SystemUtils.oomAdjusterClassName.afterConstructorHook(
+        // 注意: 类名在运行时解析, psc 布局下为 com.android.server.am.psc.OomAdjuster
+        oomAdjusterClassName.afterConstructorHook(
             classLoader = classLoader,
             hookAllMethod = true
         ) { param ->
             oomAdjuster = param.thisObject
-            mProcessList = oomAdjuster.getObjectFieldValue(
-                fieldName = FieldConstants.mProcessList
-            )!!
-            mConstants = oomAdjuster.getObjectFieldValue(
-                fieldName = FieldConstants.mConstants
-            )!!
-            lruList = mProcessList.callMethod(
-                methodName = MethodConstants.getLruProcessesLOSP
-            ) as List<*>
-            mAppProfiler = oomAdjuster.getObjectFieldValue(
-                fieldName = FieldConstants.mService
-            )!!.getObjectFieldValue(
-                fieldName = FieldConstants.mAppProfiler
-            )!!
+            val instance = oomAdjuster ?: return@afterConstructorHook
+
+            // 逐个字段 try/catch, 任何一个字段缺失都不影响其他字段的获取
+            try {
+                mProcessList = instance.getObjectFieldValue(
+                    fieldName = FieldConstants.mProcessList
+                )
+            } catch (t: Throwable) {
+                logger.warn("OomAdjuster.mProcessList 获取失败", t)
+            }
+
+            try {
+                mConstants = instance.getObjectFieldValue(
+                    fieldName = FieldConstants.mConstants
+                )
+            } catch (t: Throwable) {
+                logger.warn("OomAdjuster.mConstants 获取失败", t)
+            }
+
+            try {
+                lruList = mProcessList?.callMethod(
+                    methodName = MethodConstants.getLruProcessesLOSP
+                ) as? List<*>
+            } catch (t: Throwable) {
+                logger.warn("OomAdjuster.getLruProcessesLOSP 调用失败", t)
+            }
+
+            try {
+                mAppProfiler = instance.getObjectFieldValue(
+                    fieldName = FieldConstants.mService
+                )?.getObjectFieldValue(
+                    fieldName = FieldConstants.mAppProfiler
+                )
+            } catch (t: Throwable) {
+                logger.warn("OomAdjuster.mAppProfiler 获取失败", t)
+            }
         }
 
         /**
          * @see [OomAdjusterHook.handleUpdateAndTrimProcessLSP]
+         *
+         * HyperOS 4 / psc 布局下, updateAndTrimProcessLSP 的签名/内部逻辑已大幅变化,
+         * 且依赖的 lruList/mAppProfiler 等字段在 psc.OomAdjuster 上可能不存在,
+         * 直接 replace 会导致系统功能异常。因此 psc 布局下禁用此 replaceHook。
          */
         /*ClassConstants.OomAdjuster.beforeHook(
             classLoader = classLoader,
             methodName = MethodConstants.updateAndTrimProcessLSP,
             hookAllMethod = true,
         ) { it.args[2] = 0 }*/
-        SystemUtils.oomAdjusterClassName.replaceHook(
+        oomAdjusterClassName.replaceHook(
+            enable = !SystemUtils.isPscLayout,
             classLoader = classLoader,
             methodName = MethodConstants.updateAndTrimProcessLSP,
             hookAllMethod = true,
@@ -176,7 +213,7 @@ class OomAdjusterHookNew(
             updateAndTrimProcessLSP(it)
         }
 
-        SystemUtils.oomAdjusterClassName.replaceHook(
+        oomAdjusterClassName.replaceHook(
             enable = !SystemUtils.isUOrHigher && Features.USE_TIERED_CACHED_ADJ == true,
             classLoader = classLoader,
             methodName = MethodConstants.assignCachedAdjIfNecessary,
@@ -188,7 +225,7 @@ class OomAdjusterHookNew(
         /**
          * @see [OomAdjusterHook.handleShouldKillExcessiveProcesses]
          */
-        SystemUtils.oomAdjusterClassName.replaceHook(
+        oomAdjusterClassName.replaceHook(
             classLoader = classLoader,
             methodName = MethodConstants.shouldKillExcessiveProcesses,
             hookAllMethod = true
@@ -230,16 +267,17 @@ class OomAdjusterHookNew(
         val nowElapsed = param.args[1] as Long
         val oomAdjReason = getOomAdjReason(param)
 
-        val numLru = lruList.size
+        val currentLruList = lruList ?: return false
+        val numLru = currentLruList.size
 
         for (i in numLru - 1 downTo 0) {
             // ProcessRecord
-            val app: Any = lruList[i]!!
-            // ProcessStateRecord
+            val app: Any = currentLruList[i]!!
+            // ProcessStateRecord (psc 布局下为 ProcessRecord 自身)
             val state: Any = ProcessRecord.getProcessStateRecord(app)
             if (!ProcessRecord.isKilledByAm(app) && ProcessRecord.getThread(app) != null) {
                 // We don't need to apply the update for the process which didn't get computed
-                if (ProcessStateRecord.getCompletedAdjSeq(state) == oomAdjuster.getIntFieldValue(
+                if (ProcessStateRecord.getCompletedAdjSeq(state) == oomAdjuster?.getIntFieldValue(
                         fieldName = FieldConstants.mAdjSeq
                     )
                 ) {
@@ -293,7 +331,7 @@ class OomAdjusterHookNew(
                     )
                 } else {
                     // Keeping this process, update its uid.
-                    oomAdjuster.callMethod(
+                    oomAdjuster?.callMethod(
                         methodName = MethodConstants.updateAppUidRecLSP,
                         app
                     )
@@ -301,8 +339,9 @@ class OomAdjusterHookNew(
             }
         }
 
+        val appProfiler = mAppProfiler ?: return false
         return AppProfiler.updateLowMemStateLSP(
-            appProfiler = mAppProfiler,
+            appProfiler = appProfiler,
             numCached = 0,
             numEmpty = 0,
             numTrimming = 0,
@@ -329,7 +368,7 @@ class OomAdjusterHookNew(
         for (i in numLru - 1 downTo 0) {
             // ProcessRecord
             val app: Any = lruList[i]!!
-            // ProcessStateRecord
+            // ProcessStateRecord (psc 布局下为 ProcessRecord 自身)
             val state: Any = ProcessRecord.getProcessStateRecord(app)
             // ProcessCachedOptimizerRecord
             val opt: Any? = ProcessRecord.getProcessCachedOptimizerRecord(app)

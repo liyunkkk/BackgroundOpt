@@ -62,6 +62,8 @@ public abstract class IHook implements ILogger {
             addHookInstance();
         } catch (Throwable throwable) {
             getLogger().error("hook失败", throwable);
+            com.venus.backgroundopt.utils.BgDebugLog.log(
+                    "IHook.hook() failed: " + this.getClass().getName(), throwable);
         }
     }
 
